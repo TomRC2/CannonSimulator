@@ -255,8 +255,6 @@ public class ProjectileTracker : MonoBehaviour
         };
 
         OnImpact?.Invoke(res);
-
-        Destroy(gameObject);
     }
 
     int CountFallenPiecesNearby()
