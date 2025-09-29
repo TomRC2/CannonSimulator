@@ -2,6 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using System.Collections.Generic;
 
 [Serializable]
 public struct ImpactResult
@@ -15,6 +16,9 @@ public struct ImpactResult
 
 public class CannonController : MonoBehaviour
 {
+    private float currentForce = 10f;
+    private float currentMass = 1f;
+
     [Header("References")]
     public GameObject projectilePrefab;
     public Transform spawnPoint;
@@ -131,6 +135,7 @@ public class CannonController : MonoBehaviour
         rb.linearVelocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
 
+        tracker.OnImpact -= HandleImpact;
         tracker.OnImpact += HandleImpact;
         tracker.LaunchTime = Time.time;
 
@@ -146,7 +151,11 @@ public class CannonController : MonoBehaviour
             rb.linearVelocity = launchVector;
         }
 
-        if (reportText) reportText.text = "Disparado: �ngulo=" + angle.ToString("F1") + "�, fuerza=" + force.ToString("F1") + ", masa=" + mass.ToString("F2") + "kg";
+        if (reportText) reportText.text = "Disparado: ángulo=" + angle.ToString("F1") + " fuerza=" + force.ToString("F1") + ", masa=" + mass.ToString("F2") + "kg";
+
+        currentAngle = angle;
+        currentForce = force;
+        currentMass = mass;
     }
 
     float ParseFloat(string s, float fallback)
@@ -155,23 +164,40 @@ public class CannonController : MonoBehaviour
         if (float.TryParse(s, out r)) return r;
         return fallback;
     }
+
     void HandleImpact(ImpactResult result)
     {
-        int baseScore = Mathf.Clamp(result.piecesDown * 100 + Mathf.RoundToInt(result.collisionImpulse * 10f), 0, 9999);
+        bool hit = true;
+        float distance = Vector3.Distance(result.impactPoint, Vector3.zero);
 
-        string report = "--- Informe de tiro ---\n" +
-                        $"Tiempo de vuelo: {result.timeOfFlight:F2} s\n" +
-                        $"Punto de impacto: {result.impactPoint.ToString("F2")}\n" +
-                        $"Velocidad relativa: {result.relativeSpeed:F2} m/s\n" +
-                        $"Impulso de colisión: {result.collisionImpulse:F2} Nós\n" +
-                        $"Piezas derribadas: {result.piecesDown}\n" +
-                        $"Puntuación: {baseScore}\n" +
-                        "----------------------";
+        ShotResult shot = new ShotResult(currentAngle, currentForce, currentMass, hit, distance, result.piecesDown);
 
-        if (reportText) reportText.text = report;
-
-        Debug.Log(report);
+        var rm = FindFirstObjectByType<ResultManager>();
+        if (rm != null)
+        {
+            rm.SaveShot(shot);
+        }
+        else
+        {
+            Debug.LogWarning("ResultManager no encontrado en la escena. No se guardó el resultado.");
+        }
     }
+
+    public void OnViewShots()
+    {
+        var rm = FindFirstObjectByType<ResultManager>();
+        if (rm != null)
+        {
+            rm.GetShots((json) => {
+                Debug.Log("Resultados: " + json);
+            });
+        }
+        else
+        {
+            Debug.LogWarning("ResultManager no encontrado en la escena.");
+        }
+    }
+
     void OnDrawGizmos()
     {
         if (!spawnPoint) return;
@@ -205,12 +231,19 @@ public class ProjectileTracker : MonoBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
+        if (!collision.gameObject.CompareTag("StructurePiece")) return;
+
         float impactTime = Time.time - LaunchTime;
         Vector3 impactPoint = collision.contacts.Length > 0 ? collision.contacts[0].point : transform.position;
         float relSpeed = collision.relativeVelocity.magnitude;
         float impulse = collision.impulse.magnitude;
-
-        int pieces = CountFallenPiecesNearby();
+        HashSet<Rigidbody> touched = new HashSet<Rigidbody>();
+        foreach (var contact in collision.contacts)
+        {
+            var otherRb = contact.otherCollider ? contact.otherCollider.attachedRigidbody : null;
+            if (otherRb != null) touched.Add(otherRb);
+        }
+        int affected = touched.Count;
 
         ImpactResult res = new ImpactResult
         {
@@ -218,10 +251,12 @@ public class ProjectileTracker : MonoBehaviour
             impactPoint = impactPoint,
             relativeSpeed = relSpeed,
             collisionImpulse = impulse,
-            piecesDown = pieces
+            piecesDown = affected
         };
 
         OnImpact?.Invoke(res);
+
+        Destroy(gameObject);
     }
 
     int CountFallenPiecesNearby()
